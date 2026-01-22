@@ -199,27 +199,41 @@ class VectorStore:
             raise RAGError(f"Collection deletion failed: {e}")
     
     def get_stats(self) -> Dict[str, Any]:
+        """Get vector store statistics"""
         try:
             count = self.collection.count()
             
-            # Get sample metadata to see what sources we have
-            sample = self.collection.peek(limit=min(100, count))
-            
-            sources = set()
-            if sample['metadatas']:
-                sources = {m.get('filename', 'unknown') for m in sample['metadatas']}
-            
-            return {
-                "collection_name": self.collection_name,
-                "total_chunks": count,
-                "unique_sources": len(sources),
-                "sources": list(sources),
-                "persist_directory": self.persist_directory
-            }
-            
+            # Get ALL documents to count unique sources
+            if count > 0:
+                all_docs = self.collection.get()
+                sources = set()
+                
+                if all_docs['metadatas']:
+                    # Check both 'filename' and 'source' fields
+                    for m in all_docs['metadatas']:
+                        source = m.get('filename') or m.get('policy_name') or 'unknown'
+                        sources.add(source)
+                
+                return {
+                    "collection_name": self.collection_name,
+                    "total_chunks": count,
+                    "unique_sources": len(sources),
+                    "sources": sorted(list(sources)),
+                    "persist_directory": self.persist_directory
+                }
+            else:
+                return {
+                    "collection_name": self.collection_name,
+                    "total_chunks": 0,
+                    "unique_sources": 0,
+                    "sources": [],
+                    "persist_directory": self.persist_directory
+                }
+                
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
             return {"error": str(e)}
+
     
     def list_sources(self) -> List[str]:
         try:

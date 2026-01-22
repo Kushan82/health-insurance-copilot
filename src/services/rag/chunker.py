@@ -73,6 +73,9 @@ class PolicyChunker:
         chunks = []
         char_position = 0
         
+        # Extract page number from metadata if available
+        page_num = metadata.get("page", 0)
+        
         for i, chunk_text in enumerate(text_chunks):
             # Find actual position in original text
             start_char = text.find(chunk_text[:50], char_position)
@@ -80,6 +83,9 @@ class PolicyChunker:
                 start_char = char_position
             
             end_char = start_char + len(chunk_text)
+            
+            # Generate UNIQUE chunk ID with page number
+            chunk_id = f"{source}_page{page_num}_chunk{i}"
             
             # Create chunk with metadata
             chunk = Chunk(
@@ -89,7 +95,7 @@ class PolicyChunker:
                     "chunk_index": i,
                     "total_chunks": len(text_chunks)
                 },
-                chunk_id=f"{source}_{i}",
+                chunk_id=chunk_id,
                 source=source,
                 start_char=start_char,
                 end_char=end_char
@@ -101,58 +107,7 @@ class PolicyChunker:
         logger.info(f"Created {len(chunks)} chunks from {source}")
         
         return chunks
-    
-    def chunk_by_section(
-        self,
-        text: str,
-        metadata: dict,
-        source: str
-    ) -> List[Chunk]:
-        """
-        Chunk document by sections (preserves semantic boundaries)
-        
-        Useful for policy documents with clear section structure
-        """
-        # Extract sections
-        sections = self.text_processor.extract_sections(text)
-        
-        chunks = []
-        
-        for section_idx, (section_name, section_content) in enumerate(sections):
-            # Clean section content
-            section_content = self.text_processor.clean_text(section_content)
-            
-            # If section is too large, chunk it further
-            if len(section_content) > self.chunk_size * 1.5:
-                section_chunks = self.splitter.split_text(section_content)
-            else:
-                section_chunks = [section_content]
-            
-            # Create chunks
-            for chunk_idx, chunk_text in enumerate(section_chunks):
-                chunk = Chunk(
-                    text=chunk_text,
-                    metadata={
-                        **metadata,
-                        "section": section_name,
-                        "section_index": section_idx,
-                        "chunk_index": chunk_idx,
-                        "total_chunks": len(section_chunks)
-                    },
-                    chunk_id=f"{source}_sec{section_idx}_chunk{chunk_idx}",
-                    source=source,
-                    start_char=0,  # Would need to calculate
-                    end_char=len(chunk_text)
-                )
-                
-                chunks.append(chunk)
-        
-        logger.info(
-            f"Created {len(chunks)} chunks from {len(sections)} sections in {source}"
-        )
-        
-        return chunks
-    
+
     def chunk_multiple_documents(
         self,
         documents: List[tuple[str, dict, str]]

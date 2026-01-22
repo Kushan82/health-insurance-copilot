@@ -67,6 +67,52 @@ class DocumentLoader:
             logger.error(f"Error loading PDF {pdf_path.name}: {e}")
             raise RAGError(f"Failed to load PDF: {e}")
     
+    def load_pdf_pages(self, pdf_path: str | Path) -> List[Dict[str, Any]]:
+        """
+        Load PDF and return list of page dicts (for ingestion pipeline)
+        
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            List of dicts: [{"page": 1, "text": "..."}, {"page": 2, "text": "..."}, ...]
+        """
+        pdf_path = Path(pdf_path)
+        
+        if not pdf_path.exists():
+            raise RAGError(f"PDF file not found: {pdf_path}")
+        
+        if pdf_path.suffix.lower() not in self.supported_extensions:
+            raise RAGError(f"Unsupported file type: {pdf_path.suffix}")
+        
+        logger.info(f"Loading PDF: {pdf_path.name}")
+        
+        try:
+            pages = []
+            total_chars = 0
+            
+            with pymupdf.open(pdf_path) as doc:
+                for page_num, page in enumerate(doc, start=1):
+                    # Extract text from page
+                    text = page.get_text()
+                    
+                    pages.append({
+                        "page": page_num,
+                        "text": text
+                    })
+                    
+                    total_chars += len(text)
+            
+            logger.info(
+                f"✅ Loaded {pdf_path.name} - {len(pages)} pages, {total_chars} characters"
+            )
+            
+            return pages
+            
+        except Exception as e:
+            logger.error(f"Error loading PDF {pdf_path.name}: {e}")
+            raise RAGError(f"Failed to load PDF: {e}")
+    
     def load_multiple(self, pdf_paths: List[str | Path]) -> List[Document]:
         """
         Load multiple PDF files
