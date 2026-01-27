@@ -114,25 +114,95 @@ class VectorStore:
         Args:
             query_embedding: Query embedding vector
             top_k: Number of results to return
-            filters: Metadata filters (e.g., {"filename": "policy.pdf"})
-            
+            filters: Metadata filters (e.g., {"filename": "policy.pdf"} or {"policy": "care supreme"})
+        
         Returns:
             Dictionary with ids, documents, metadatas, distances
         """
         try:
+            # ✅ FIX: Handle policy filter with post-filtering
+            # ChromaDB doesn't support $contains, only exact match operators
+            where_clause = None
+            policy_filter = None
+            
+            if filters:
+                # Check if there's a 'policy' key (our custom filter)
+                if 'policy' in filters:
+                    # Extract policy filter for post-processing
+                    policy_filter = filters['policy'].lower().replace(' ', '_')
+                    # Get more results for filtering
+                    query_top_k = top_k * 3
+                    # Don't pass 'policy' to ChromaDB
+                    remaining_filters = {k: v for k, v in filters.items() if k != 'policy'}
+                    
+                    # Only set where_clause if there are valid remaining filters
+                    if remaining_filters:
+                        # ⚠️ Make sure remaining filters don't have $contains or $or
+                        # For now, only pass exact match filters
+                        safe_filters = {}
+                        for k, v in remaining_filters.items():
+                            if not isinstance(v, dict):  # Simple key-value only
+                                safe_filters[k] = v
+                        if safe_filters:
+                            where_clause = safe_filters
+                else:
+                    # No policy filter, but check if filters have invalid operators
+                    query_top_k = top_k
+                    # ⚠️ Don't pass $or or $contains to ChromaDB
+                    # Filter out complex operators and only keep simple filters
+                    safe_filters = {}
+                    for k, v in filters.items():
+                        if k not in ['$or', '$and'] and not isinstance(v, dict):
+                            safe_filters[k] = v
+                    if safe_filters:
+                        where_clause = safe_filters
+            else:
+                query_top_k = top_k
+            
+            # Query ChromaDB with only safe filters (or None)
             results = self.collection.query(
                 query_embeddings=[query_embedding.tolist()],
-                n_results=top_k,
-                where=filters,
+                n_results=query_top_k,
+                where=where_clause,
                 include=["documents", "metadatas", "distances"]
             )
+            
+            # ✅ FIX: Post-filter by policy name if needed
+            if policy_filter and results['documents'] and results['documents'][0]:
+                filtered_ids = []
+                filtered_docs = []
+                filtered_metas = []
+                filtered_dists = []
+                
+                for i, metadata in enumerate(results['metadatas'][0]):
+                    # Check both 'source' and 'filename' fields
+                    source = metadata.get('source', '').lower()
+                    filename = metadata.get('filename', '').lower()
+                    
+                    # Check if policy name is in source or filename
+                    if policy_filter in source or policy_filter in filename:
+                        filtered_ids.append(results['ids'][0][i])
+                        filtered_docs.append(results['documents'][0][i])
+                        filtered_metas.append(metadata)
+                        filtered_dists.append(results['distances'][0][i])
+                        
+                        if len(filtered_ids) >= top_k:
+                            break
+                
+                # Return filtered results
+                return {
+                    'ids': [filtered_ids],
+                    'documents': [filtered_docs],
+                    'metadatas': [filtered_metas],
+                    'distances': [filtered_dists]
+                }
             
             return results
             
         except Exception as e:
             logger.error(f"Error querying vector store: {e}")
             raise RAGError(f"Query failed: {e}")
-    
+
     def search(
         self,
         query_text: str,

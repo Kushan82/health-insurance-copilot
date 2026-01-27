@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.services.rag.rag_chain import RAGChain
 from src.services.rag.retriever import Retriever
+from src.services.rag.query_processor import QueryProcessor
 from src.services.rag.embedding_service import EmbeddingService
 from src.services.rag.vector_store import VectorStore
 
@@ -141,6 +142,13 @@ def test_rag_with_real_data():
         print(f"Expected Answer: {expected}")
         print(f"{'─'*60}")
         
+        processor = QueryProcessor()
+        query_data = processor.process_query(query)
+        print(f"\n🔍 Query Analysis:")
+        print(f"   Type: {query_data['query_type']}")
+        print(f"   Detected Policy: {query_data['detected_policy']}")
+        if query_data['expanded_terms']:
+            print(f"   Expanded Terms: {', '.join(query_data['expanded_terms'][:3])}")        
         try:
             # Generate answer
             response = rag_chain.generate_answer(query, top_k=5)
@@ -156,6 +164,10 @@ def test_rag_with_real_data():
             if response.sources:
                 print(f"\n📚 Sources ({len(response.sources)}):")
                 for j, source in enumerate(response.sources[:3], 1):  # Show top 3
+                    section_type = "unknown"
+                    if hasattr(source, 'metadata') and isinstance(source.metadata, dict):
+                        section_type = source.metadata.get('section_type', 'unknown')
+                    
                     print(f"   {j}. {source.filename}")
                     print(f"      Similarity: {source.similarity:.2%}")
                     print(f"      Preview: {source.preview[:150]}...")

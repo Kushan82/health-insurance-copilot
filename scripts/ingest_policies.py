@@ -6,18 +6,19 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 import time
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.services.rag.document_loader import DocumentLoader
-from src.services.rag.text_processor import TextProcessor
-from src.services.rag.chunker import PolicyChunker
-from src.services.rag.embedding_service import EmbeddingService
-from src.services.rag.vector_store import VectorStore
 from loguru import logger
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.core.config import get_settings
+from src.services.rag.document_loader import DocumentLoader
+from src.services.rag.text_processor import TextProcessor
+from src.services.rag.chunker import PolicyChunker, Chunk
+from src.services.rag.embedding_service import EmbeddingService
+from src.services.rag.vector_store import VectorStore
+from src.services.rag.semantic_chunker import SemanticPolicyChunker
+
+settings = get_settings()
 class PolicyIngestion:
     """Ingest policy documents into vector store"""
     
@@ -26,7 +27,10 @@ class PolicyIngestion:
         
         self.loader = DocumentLoader()
         self.processor = TextProcessor()
-        self.chunker = PolicyChunker()
+        self.chunker = SemanticPolicyChunker(
+            chunk_size=800,
+            chunk_overlap=150
+        )
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore(reset=reset)
         
@@ -137,13 +141,23 @@ class PolicyIngestion:
                 }
                 
                 # Chunk the page with unique source
-                chunks = self.chunker.chunk_document(
+                semantic_chunks = self.chunker.chunk_with_context(
                     text=cleaned_text,
                     metadata=page_metadata,
-                    source=unique_source  # ← Changed from file_path.name
+                    source=unique_source  
                 )
-                
-                all_chunks.extend(chunks)
+                regular_chunks = [
+                    Chunk(
+                        text=sc.text,
+                        metadata=sc.metadata,
+                        chunk_id=sc.chunk_id,
+                        source=sc.source,
+                        start_char=0,
+                        end_char=len(sc.text)
+                    )
+                    for sc in semantic_chunks
+                ]
+                all_chunks.extend(regular_chunks)
             
             if not all_chunks:
                 logger.warning(f"No chunks created from {file_path.name}")

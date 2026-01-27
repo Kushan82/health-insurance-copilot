@@ -81,7 +81,7 @@ class SemanticPolicyChunker:
                         'chunk_index': chunk_idx,
                         'section_index': section_idx
                     },
-                    chunk_id=f"{source}_s{section_idx}_c{chunk_idx}",
+                    chunk_id=f"{source}_p{metadata.get('page', 0)}_s{section_idx}_c{chunk_idx}",
                     source=source,
                     section_type=section_type,
                     importance_score=importance
