@@ -13,7 +13,7 @@ from src.services.rag.retriever import Retriever, RetrievedChunk
 from src.services.rag.query_processor import QueryProcessor
 from src.services.rag.embedding_service import EmbeddingService
 from src.services.rag.vector_store import VectorStore
-
+from src.services.rag.fact_extractor import FactExtractor
 settings = get_settings()
 
 
@@ -46,7 +46,7 @@ class RAGChain:
     ):
         self.llm_client = llm_client or OllamaClient()
         self.query_processor = QueryProcessor()
-        
+        self.fact_extractor = FactExtractor()
         # Initialize RAG components if not provided
         if retriever:
             self.retriever = retriever
@@ -89,15 +89,30 @@ class RAGChain:
                     query=query,
                     top_k=top_k or 5,
                     filters=filters
-                )
+                )            
+            # Step 2: Build context from chunks
+            context = self._build_context(retrieved_chunks)
+            # Step 2.5: Extract & prepend facts
+            extracted_facts = {}
+            if "waiting period" in query.lower() or "waiting time" in query.lower():
+                for chunk in retrieved_chunks[:3]:  # Check top 3 chunks
+                    wp = self.fact_extractor.extract_waiting_period(chunk.text)
+                    if wp and wp['months'] > 0:
+                        extracted_facts['waiting_period'] = wp
+                        logger.info(f"✅ Extracted waiting period: {wp['value']} {wp['unit']}")
+                        break
+            # Add facts to context
+            if extracted_facts:
+                fact_text = "\n\n**Extracted Key Facts:**\n"
+                if 'waiting_period' in extracted_facts:
+                    wp = extracted_facts['waiting_period']
+                    fact_text += f"- Waiting Period: {wp['value']} {wp['unit']} ({wp['months']} months)\n"
+                
+                context = fact_text + "\n" + context
             
             if not retrieved_chunks:
                 logger.warning("No relevant chunks found for query")
-                return self._create_fallback_response(query, start_time)
-            
-            # Step 2: Build context from chunks
-            context = self._build_context(retrieved_chunks)
-            
+                return self._create_fallback_response(query, start_time) 
             # Step 3: Construct enhanced prompt
             prompt = self._construct_prompt(query, context, retrieved_chunks)
             

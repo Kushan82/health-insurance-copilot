@@ -18,12 +18,13 @@ class QueryProcessor:
         
         # Policy name normalization
         self.policy_names = {
-            'optima restore': ['HDFC Optima Restore', 'Optima Restore'],
+            'optima restore': ['HDFC Optima Restore', 'Optima Restore', 'hdfc ergo optima restore', 'HDFC ERGO Optima Restore'],
+            'optima secure': ['HDFC Optima Secure', 'Optima Secure', 'hdfc ergo optima secure'],
             'care supreme': ['Care Supreme', 'Care Health Supreme'],
             'care ultimate': ['Care Ultimate', 'Ultimate Care'],
-            'medicare plus': ['Medicare Plus', 'Max Bupa Medicare Plus'],
-            'medicare premier': ['Medicare Premier', 'Max Bupa Medicare Premier'],
-            'optima secure': ['HDFC Optima Secure', 'Optima Secure']
+            'medicare plus': ['Medicare Plus', 'Tata AIG Medicare Plus', 'tata medicare plus'],
+            'medicare premier': ['Medicare Premier', 'Tata AIG Medicare Premier', 'tata medicare premier'],
+            'my health care': ['My Health Care Plan', 'Bajaj My Health Care', 'bajaj health care'],
         }
     
     def process_query(self, query: str) -> Dict[str, any]:

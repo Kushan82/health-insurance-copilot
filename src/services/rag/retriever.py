@@ -180,54 +180,57 @@ class Retriever:
         filters: Optional[Dict[str, Any]] = None
     ) -> List[RetrievedChunk]:
         """
-        Enhanced hybrid retrieval with multi-signal reranking
+        ✅ IMPROVED: Enhanced hybrid retrieval with balanced multi-signal reranking
+        
+        Key improvements:
+        1. Higher initial threshold (0.3 instead of 0.15) for better quality
+        2. Adjusted reranking weights to preserve semantic scores
+        3. Smarter deduplication that preserves diversity
         """
         from src.services.rag.query_processor import QueryProcessor
         
         # Step 1: Process and expand query
         processor = QueryProcessor()
         query_data = processor.process_query(query)
-        
         logger.info(f"Hybrid retrieval for: {query_data['query_type']} query")
         
         # Step 2: Add policy filter if detected
         if query_data['detected_policy'] and not filters:
             filters = {'policy': query_data['detected_policy']}
         
-        # Step 3: Retrieve MORE chunks initially for better reranking
-        initial_k = top_k * 4  # 4x for rich candidate pool
+        # Step 3: Retrieve MORE chunks initially - but with HIGHER threshold
+        initial_k = top_k * 3  # ✅ CHANGED: 3x instead of 4x (less noise)
         expanded_query = query_data['processed']
+        
+        initial_threshold = max(0.30, settings.similarity_threshold)  
         
         initial_results = self.retrieve(
             query=expanded_query,
             top_k=initial_k,
             filters=filters,
-            similarity_threshold=settings.initial_similarity_threshold  # ✅ Use from settings
+            similarity_threshold=initial_threshold  # ✅ Higher quality baseline
         )
         
         if not initial_results:
             logger.warning(f"No results found for query: {query}")
             return []
         
-        # Step 4: Multi-signal reranking
-        reranked = self._multi_signal_rerank(
+        logger.debug(f"Initial retrieval: {len(initial_results)} chunks (threshold: {initial_threshold:.2f})")
+        
+        # Step 4: Multi-signal reranking with IMPROVED weighting
+        reranked = self._multi_signal_rerank_improved(
             chunks=initial_results,
             original_query=query,
             expanded_query=expanded_query,
             query_type=query_data['query_type']
         )
-
-        # ✅ NEW: Step 4.5: Deduplicate chunks
-        deduplicated = self._deduplicate_chunks(reranked)
-
-        # Step 5: Apply final threshold and return top K
-        final_threshold = settings.final_similarity_threshold
-        final_results = [c for c in deduplicated if c.similarity >= final_threshold][:top_k]
-
-        if not final_results and deduplicated:
-            final_results = deduplicated[:top_k]
-            logger.warning(f"No chunks passed {final_threshold} threshold, returning top {len(final_results)}")
-
+        
+        # Step 5: Smart deduplication (less aggressive)
+        deduplicated = self._deduplicate_chunks_smart(reranked)
+        
+        # Step 6: Return top K without harsh final threshold
+        # ✅ CHANGED: No final threshold filtering - trust the reranking
+        final_results = deduplicated[:top_k]
         
         avg_sim = sum(c.similarity for c in final_results) / len(final_results) if final_results else 0
         logger.info(
@@ -237,7 +240,8 @@ class Retriever:
         
         return final_results
 
-    def _multi_signal_rerank(
+
+    def _multi_signal_rerank_improved(
         self,
         chunks: List[RetrievedChunk],
         original_query: str,
@@ -245,14 +249,15 @@ class Retriever:
         query_type: str
     ) -> List[RetrievedChunk]:
         """
-        Advanced multi-signal reranking
+        ✅ IMPROVED: Balanced multi-signal reranking that PRESERVES high semantic scores
         
-        Signals:
-        1. Semantic similarity (vector similarity)
-        2. Keyword overlap with query
-        3. Document importance score
-        4. Query type relevance
-        5. Chunk position/context
+        New weighting:
+        - Semantic similarity: 60% (increased from 40%)
+        - Keyword overlap: 20% (decreased from 25%)
+        - Phrase matching: 10% (decreased from 15%)
+        - Query type bonus: 10% (kept same)
+        
+        Removed: Document importance (unreliable without proper metadata)
         """
         query_lower = original_query.lower()
         query_words = self._extract_keywords(query_lower)
@@ -260,59 +265,74 @@ class Retriever:
         for chunk in chunks:
             text_lower = chunk.text.lower()
             
-            # Signal 1: Base semantic similarity (40% weight)
+            # Signal 1: Base semantic similarity (60% weight) ✅ INCREASED
             semantic_score = chunk.similarity
             
-            # Signal 2: Keyword overlap (25% weight)
+            # Signal 2: Keyword overlap (20% weight) ✅ DECREASED
             keyword_score = self._calculate_keyword_overlap(query_words, text_lower)
             
-            # Signal 3: Exact phrase matching (15% weight)
+            # Signal 3: Exact phrase matching (10% weight) ✅ DECREASED
             phrase_score = self._calculate_phrase_match(query_lower, text_lower)
             
-            # Signal 4: Document importance from metadata (10% weight)
-            importance = chunk.metadata.get('importance_score', 0.5)
-            
-            # Signal 5: Query type bonus (10% weight)
+            # Signal 4: Query type bonus (10% weight)
             type_bonus = self._get_query_type_bonus(chunk, query_type, text_lower)
             
-            # Combined score
-            chunk.similarity = (
-                semantic_score * 0.40 +
-                keyword_score * 0.25 +
-                phrase_score * 0.15 +
-                importance * 0.10 +
-                type_bonus * 0.10
+            # ✅ IMPROVED: New combined score that preserves semantic quality
+            # Semantic score is dominant, others provide small boosts
+            combined_score = (
+                semantic_score * 0.60 +  # ✅ Semantic is primary
+                keyword_score * 0.20 +   # ✅ Keywords add context
+                phrase_score * 0.10 +    # ✅ Exact matches are bonus
+                type_bonus * 0.10        # ✅ Type-specific boost
             )
+            
+            # ✅ BONUS: If semantic score is already high (>0.65), preserve it more
+            if semantic_score >= 0.65:
+                combined_score = max(combined_score, semantic_score * 0.95)
+            
+            chunk.similarity = combined_score
         
         # Sort by combined score
         return sorted(chunks, key=lambda x: x.similarity, reverse=True)
-    def _deduplicate_chunks(self, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
+
+
+    def _deduplicate_chunks_smart(self, chunks: List[RetrievedChunk]) -> List[RetrievedChunk]:
         """
-        Remove duplicate or near-duplicate chunks based on text similarity
+        ✅ IMPROVED: Smarter deduplication that preserves diversity
         
-        Uses a more lenient approach to avoid over-deduplication
+        Changes:
+        - Use hash of first 500 chars (not 300) for better uniqueness
+        - Only deduplicate if chunks are from SAME source AND have high text overlap
+        - Preserve chunks from different sources even if similar
         """
         if not chunks:
             return []
         
         deduplicated = []
-        seen_texts = set()
+        seen_signatures = set()
         
         for chunk in chunks:
-            # Create a more unique signature using 300 chars + source + page
-            text_normalized = chunk.text[:300].lower().strip()
-            source_info = f"{chunk.source}_{chunk.metadata.get('page', 'nopage')}"
-            text_signature = f"{text_normalized}_{source_info}"
+            # Create signature from first 500 chars (not 300)
+            text_normalized = chunk.text[:500].lower().strip()
             
-            # Only skip if EXACT match (same text + same source + same page)
-            if text_signature not in seen_texts:
+            # Create hash to avoid memory issues with long strings
+            import hashlib
+            text_hash = hashlib.md5(text_normalized.encode()).hexdigest()[:16]
+            
+            # Include source in signature (only dedup within same source)
+            source_info = f"{chunk.source}"
+            signature = f"{text_hash}_{source_info}"
+            
+            # ✅ CHANGED: Only skip if exact match from same source
+            if signature not in seen_signatures:
                 deduplicated.append(chunk)
-                seen_texts.add(text_signature)
+                seen_signatures.add(signature)
         
         if len(deduplicated) < len(chunks):
-            logger.info(f"Deduplicated: {len(chunks)} → {len(deduplicated)} chunks")
+            logger.debug(f"Deduplicated: {len(chunks)} → {len(deduplicated)} chunks")
         
         return deduplicated
+
 
 
 

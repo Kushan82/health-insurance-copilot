@@ -1,288 +1,352 @@
 """
-Policy document ingestion pipeline
-Processes PDFs from data/raw/policies/ into vector store
+Enhanced Policy Document Ingestion Pipeline
+Supports multi-level directory structure organized by company
 """
-import sys
-from pathlib import Path
-from typing import List, Dict
-import time
-from loguru import logger
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from pathlib import Path
+from typing import List, Dict, Optional
+import time
+import sys
+from loguru import logger
 
 from src.core.config import get_settings
 from src.services.rag.document_loader import DocumentLoader
-from src.services.rag.text_processor import TextProcessor
-from src.services.rag.chunker import PolicyChunker, Chunk
+from src.services.rag.chunker import PolicyChunker
 from src.services.rag.embedding_service import EmbeddingService
 from src.services.rag.vector_store import VectorStore
-from src.services.rag.semantic_chunker import SemanticPolicyChunker
 
 settings = get_settings()
-class PolicyIngestion:
-    """Ingest policy documents into vector store"""
+
+
+class PolicyIngestionPipeline:
+    """Enhanced pipeline for ingesting policy documents into vector store"""
     
-    def __init__(self, reset: bool = False):
-        logger.info("Initializing ingestion pipeline...")
+    def __init__(
+        self,
+        source_dir: str = "./data/raw/policies",
+        persist_dir: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None
+    ):
+        self.source_dir = Path(source_dir)
+        self.persist_dir = persist_dir or settings.chroma_persist_directory
         
+        # Initialize components
         self.loader = DocumentLoader()
-        self.processor = TextProcessor()
-        self.chunker = SemanticPolicyChunker(
-            chunk_size=800,
-            chunk_overlap=150
+        self.chunker = PolicyChunker(
+            chunk_size=chunk_size or settings.chunk_size,
+            chunk_overlap=chunk_overlap or settings.chunk_overlap
         )
         self.embedding_service = EmbeddingService()
-        self.vector_store = VectorStore(reset=reset)
+        self.vector_store = None
         
+        # Statistics tracking
         self.stats = {
-            "files_processed": 0,
-            "total_chunks": 0,
-            "total_pages": 0,
-            "insurers": set(),
-            "policies": set()
+            'total_docs': 0,
+            'total_chunks': 0,
+            'failed_docs': 0,
+            'total_chars': 0,
+            'processing_time_ms': 0,
+            'doc_details': [],
+            'companies': {}
         }
+        
+        logger.info(f"📁 Ingestion pipeline initialized")
+        logger.info(f"   Source: {self.source_dir}")
+        logger.info(f"   Vector Store: {self.persist_dir}")
+        logger.info(f"   Chunk Size: {self.chunker.chunk_size} (Overlap: {self.chunker.chunk_overlap})")
     
-    def discover_policies(self, base_dir: str = "data/raw/policies") -> List[Path]:
-        """Discover all PDF files in policy directories"""
-        base_path = Path(base_dir)
-        
-        if not base_path.exists():
-            logger.error(f"Policy directory not found: {base_dir}")
-            return []
-        
-        # Find all PDFs recursively
-        pdf_files = list(base_path.rglob("*.pdf"))
-        
-        logger.info(f"Found {len(pdf_files)} PDF files")
-        
-        return sorted(pdf_files)
-    
-    def extract_metadata_from_path(self, file_path: Path) -> Dict:
-        """Extract metadata from file path structure"""
-        # Path structure: data/raw/policies/{insurer}/{filename}.pdf
-        parts = file_path.parts
-        
-        # Extract insurer from parent directory
-        insurer = parts[-2] if len(parts) >= 2 else "unknown"
-        
-        # Clean insurer name mapping
-        insurer_map = {
-            "bajaj": "Bajaj Allianz",
-            "bajaj_allianz": "Bajaj Allianz",
-            "hdfc_ergo": "HDFC ERGO",
-            "care_health": "Care Health Insurance",
-            "tata_aig": "Tata AIG"
-        }
-        insurer_name = insurer_map.get(insurer.lower(), insurer.replace("_", " ").title())
-        
-        # Extract policy name and document type from filename
-        filename = file_path.stem  # Without .pdf
-        
-        # Determine document type
-        doc_type = "unknown"
-        if "wording" in filename.lower():
-            doc_type = "policy_wording"
-        elif "brochure" in filename.lower():
-            doc_type = "brochure"
-        elif "prospectus" in filename.lower():
-            doc_type = "prospectus"
-        
-        # Extract policy name (remove document type suffixes)
-        policy_name = filename
-        for suffix in ["_wording", "_brochure", "_prospectus"]:
-            policy_name = policy_name.replace(suffix, "")
-        
-        # Clean policy name
-        policy_name = policy_name.replace("_", " ").title()
-        
-        return {
-            "filename": file_path.name,
-            "insurer": insurer_name,
-            "policy_name": policy_name,
-            "document_type": doc_type,
-            "file_path": str(file_path)
-        }
-    
-    def process_document(self, file_path: Path) -> int:
-        """Process a single PDF document"""
-        logger.info(f"Processing: {file_path.name}")
-        
-        try:
-            # Extract metadata
-            base_metadata = self.extract_metadata_from_path(file_path)
-            
-            # Create unique source identifier (insurer + filename)
-            unique_source = f"{base_metadata['insurer']}_{file_path.stem}"
-            
-            # Load document
-            pages = self.loader.load_pdf_pages(str(file_path))
-            
-            if not pages:
-                logger.warning(f"No pages extracted from {file_path.name}")
-                return 0
-            
-            logger.info(f"  Loaded {len(pages)} pages")
-            
-            # Process each page
-            all_chunks = []
-            
-            for page in pages:
-                # Clean text
-                cleaned_text = self.processor.clean_text(page["text"])
-                
-                if not cleaned_text or len(cleaned_text.strip()) < 50:
-                    continue  # Skip empty/tiny pages
-                
-                # Create page metadata
-                page_metadata = {
-                    **base_metadata,
-                    "page": page["page"],
-                    "total_pages": len(pages)
-                }
-                
-                # Chunk the page with unique source
-                semantic_chunks = self.chunker.chunk_with_context(
-                    text=cleaned_text,
-                    metadata=page_metadata,
-                    source=unique_source  
-                )
-                regular_chunks = [
-                    Chunk(
-                        text=sc.text,
-                        metadata=sc.metadata,
-                        chunk_id=sc.chunk_id,
-                        source=sc.source,
-                        start_char=0,
-                        end_char=len(sc.text)
-                    )
-                    for sc in semantic_chunks
-                ]
-                all_chunks.extend(regular_chunks)
-            
-            if not all_chunks:
-                logger.warning(f"No chunks created from {file_path.name}")
-                return 0
-            
-            logger.info(f"  Created {len(all_chunks)} chunks")
-            
-            # Generate embeddings
-            texts = [chunk.text for chunk in all_chunks]
-            embeddings = self.embedding_service.embed_batch(
-                texts,
-                show_progress=False
-            )
-            
-            # Add to vector store
-            self.vector_store.add_chunks(all_chunks, embeddings)
-            
-            # Update stats
-            self.stats["files_processed"] += 1
-            self.stats["total_chunks"] += len(all_chunks)
-            self.stats["total_pages"] += len(pages)
-            self.stats["insurers"].add(base_metadata["insurer"])
-            policy_name_normalized = base_metadata["policy_name"].strip().title()
-            self.stats["policies"].add(policy_name_normalized)
-            
-            logger.info(f"  ✅ Successfully indexed {file_path.name}")
-            
-            return len(all_chunks)
-            
-        except Exception as e:
-            logger.error(f"  ❌ Error processing {file_path.name}: {e}")
-            return 0
-
-    
-    def ingest_all(self, base_dir: str = "data/raw/policies") -> None:
-        """Ingest all policy documents"""
+    def ingest_all(self, reset_store: bool = False) -> Dict:
+        """Ingest all policy documents from source directory (supports subdirectories)"""
         start_time = time.time()
         
-        print("\n" + "="*60)
-        print("  📚 POLICY DOCUMENT INGESTION")
-        print("="*60)
+        logger.info("=" * 60)
+        logger.info("  🚀 STARTING POLICY INGESTION PIPELINE")
+        logger.info("=" * 60)
         
-        # Discover files
-        pdf_files = self.discover_policies(base_dir)
+        # Initialize vector store
+        try:
+            if reset_store:
+                logger.warning("⚠️  Resetting vector store...")
+                self.vector_store = VectorStore(persist_directory=self.persist_dir, reset=True)
+                logger.info("✅ Vector store reset complete")
+            else:
+                self.vector_store = VectorStore(persist_directory=self.persist_dir)
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize vector store: {e}")
+            return {'error': str(e)}
+        
+        # Find all PDFs recursively
+        pdf_files = sorted(self.source_dir.rglob("*.pdf"))
         
         if not pdf_files:
-            logger.error("No PDF files found!")
-            return
+            logger.warning(f"⚠️  No PDF files found in {self.source_dir}")
+            return self.stats
         
-        print(f"\nFound {len(pdf_files)} PDF files to process\n")
+        # Group by company
+        companies = {}
+        for pdf_path in pdf_files:
+            company = pdf_path.parent.name
+            if company not in companies:
+                companies[company] = []
+            companies[company].append(pdf_path)
         
-        # Process each file
-        for i, pdf_file in enumerate(pdf_files, 1):
-            print(f"\n[{i}/{len(pdf_files)}] Processing: {pdf_file.name}")
-            print("-" * 60)
+        logger.info(f"📄 Found {len(pdf_files)} policy documents across {len(companies)} companies")
+        for company, files in companies.items():
+            logger.info(f"   • {company}: {len(files)} files")
+        logger.info("")
+        
+        # Process each document
+        for idx, pdf_path in enumerate(pdf_files, 1):
+            company = pdf_path.parent.name
+            logger.info(f"[{idx}/{len(pdf_files)}] Processing: {company}/{pdf_path.name}")
             
-            self.process_document(pdf_file)
+            try:
+                doc_stats = self._ingest_document(pdf_path, company)
+                self.stats['doc_details'].append(doc_stats)
+                self.stats['total_docs'] += 1
+                
+                # Track per-company stats
+                if company not in self.stats['companies']:
+                    self.stats['companies'][company] = {'docs': 0, 'chunks': 0, 'chars': 0}
+                self.stats['companies'][company]['docs'] += 1
+                self.stats['companies'][company]['chunks'] += doc_stats['chunks']
+                self.stats['companies'][company]['chars'] += doc_stats['chars']
+                
+                logger.info(
+                    f"   ✅ {doc_stats['chunks']} chunks | "
+                    f"{doc_stats['chars']:,} chars | "
+                    f"{doc_stats['time_ms']:.0f}ms\n"
+                )
+            except Exception as e:
+                logger.error(f"   ❌ Failed: {e}")
+                self.stats['failed_docs'] += 1
         
-        # Show final stats
-        elapsed = time.time() - start_time
+        # Calculate statistics
+        self.stats['processing_time_ms'] = (time.time() - start_time) * 1000
+        self.stats['total_chunks'] = sum(d['chunks'] for d in self.stats['doc_details'])
+        self.stats['total_chars'] = sum(d['chars'] for d in self.stats['doc_details'])
         
-        print("\n" + "="*60)
-        print("  ✅ INGESTION COMPLETE!")
-        print("="*60)
-        print(f"\n📊 Statistics:")
-        print(f"   Files processed: {self.stats['files_processed']}")
-        print(f"   Total pages: {self.stats['total_pages']}")
-        print(f"   Total chunks: {self.stats['total_chunks']}")
-        print(f"   Unique insurers: {len(self.stats['insurers'])}")
-        print(f"   Unique policies: {len(self.stats['policies'])}")
-        print(f"   Time taken: {elapsed:.1f}s")
+        self._log_summary()
+        return self.stats
+    
+    def _ingest_document(self, pdf_path: Path, company: str) -> Dict:
+        """Ingest a single document"""
+        doc_start = time.time()
         
-        print(f"\n📋 Insurers indexed:")
-        for insurer in sorted(self.stats['insurers']):
-            print(f"   • {insurer}")
+        # Step 1: Load document pages
+        pages = self.loader.load_pdf_pages(str(pdf_path))
         
-        print(f"\n📋 Policies indexed:")
-        for policy in sorted(self.stats['policies']):
-            print(f"   • {policy}")
+        if not pages:
+            raise ValueError("No content extracted from PDF")
         
-        # Show vector store stats
-        print("\n" + "="*60)
-        print("  🗄️  Vector Store Status")
-        print("="*60)
+        # Step 2: Combine pages
+        full_text = "\n\n".join([page["text"] for page in pages])
+        char_count = len(full_text)
         
-        vs_stats = self.vector_store.get_stats()
-        print(f"\nCollection: {vs_stats['collection_name']}")
-        print(f"Total chunks: {vs_stats['total_chunks']}")
-        print(f"Unique sources: {vs_stats['unique_sources']}")
+        # ✅ ENHANCED METADATA
+        base_metadata = {
+            'source': pdf_path.name,
+            'filename': pdf_path.name,
+            'company': company,  # Keep for backward compatibility
+            'insurer': self._normalize_company_name(company),  # NEW
+            'policy_name': self._extract_policy_name(pdf_path.name),  # NEW
+            'document_type': self._classify_document(pdf_path.name),  # Already exists
+            'total_pages': len(pages),
+            'ingested_at': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        # Step 3: Chunk
+        chunks_objs = self.chunker.chunk_document(
+            text=full_text,
+            metadata=base_metadata,
+            source=f"{company}/{pdf_path.name}"
+        )
+        
+        if not chunks_objs:
+            raise ValueError("No chunks generated")
+        
+        # Step 4: Filter
+        valid_chunk_objs = []
+        for chunk_obj in chunks_objs:
+            text = chunk_obj.text.strip()
+            if len(text) < 50 or len(text.split()) < 10:
+                continue
+            alpha_ratio = sum(c.isalnum() or c.isspace() for c in text) / len(text)
+            if alpha_ratio < 0.6:
+                continue
+            valid_chunk_objs.append(chunk_obj)
+        
+        # Step 5: Generate embeddings
+        chunk_texts = [chunk.text for chunk in valid_chunk_objs]
+        embeddings = self.embedding_service.embed_batch(chunk_texts)  # ✅ FIXED: Changed from embed_documents to embed_batch
+        
+        # Step 6: Store
+        self.vector_store.add_chunks(chunks=valid_chunk_objs, embeddings=embeddings)
+        
+        processing_time = (time.time() - doc_start) * 1000
+        
+        return {
+            'filename': pdf_path.name,
+            'company': company,
+            'chunks': len(valid_chunk_objs),
+            'chars': char_count,
+            'pages': len(pages),
+            'time_ms': processing_time,
+            'avg_chunk_size': char_count // len(valid_chunk_objs) if valid_chunk_objs else 0
+        }
+    def _normalize_company_name(self, company: str) -> str:
+        """Convert folder name to display name"""
+        mapping = {
+            'bajaj': 'Bajaj Allianz',
+            'care_health': 'Care Health Insurance',
+            'hdfc_ergo': 'HDFC ERGO',
+            'tata_aig': 'Tata AIG'
+        }
+        return mapping.get(company.lower(), company)
+
+    def _extract_policy_name(self, filename: str) -> str:
+        """Extract policy name from filename"""
+        filename_lower = filename.lower()
+        
+        # HDFC ERGO
+        if 'optima_restore' in filename_lower:
+            return 'Optima Restore'
+        elif 'optima_secure' in filename_lower:
+            return 'Optima Secure'
+        
+        # Care Health
+        elif 'care_supreme' in filename_lower:
+            return 'Care Supreme'
+        elif 'care_ultimate' in filename_lower:
+            return 'Care Ultimate'
+        
+        # Tata AIG
+        elif 'medicare_plus' in filename_lower:
+            return 'Medicare Plus'
+        elif 'medicare_premier' in filename_lower:
+            return 'Medicare Premier'
+        
+        # Bajaj
+        elif 'my_health_care_plan_1' in filename_lower:
+            return 'My Health Care Plan 1'
+        elif 'my_health_care_plan_6' in filename_lower:
+            return 'My Health Care Plan 6'
+        
+        return 'Unknown Policy'
+    
+    def _classify_document(self, filename: str) -> str:
+        """Classify document type"""
+        filename_lower = filename.lower()
+        if 'wording' in filename_lower:
+            return 'policy_wording'
+        elif 'prospectus' in filename_lower:
+            return 'prospectus'
+        elif 'brochure' in filename_lower:
+            return 'brochure'
+        return 'general'
+    
+    def _log_summary(self):
+        """Log summary"""
+        logger.info("\n" + "=" * 60)
+        logger.info("  📊 INGESTION SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"✅ Successfully processed: {self.stats['total_docs']} documents")
+        logger.info(f"❌ Failed: {self.stats['failed_docs']} documents")
+        logger.info(f"📦 Total chunks: {self.stats['total_chunks']:,}")
+        logger.info(f"📝 Total characters: {self.stats['total_chars']:,}")
+        logger.info(f"⏱️  Processing time: {self.stats['processing_time_ms']/1000:.2f}s")
+        
+        if self.stats['total_docs'] > 0:
+            avg_chunks = self.stats['total_chunks'] / self.stats['total_docs']
+            avg_time = self.stats['processing_time_ms'] / self.stats['total_docs']
+            logger.info(f"📊 Avg chunks/doc: {avg_chunks:.1f}")
+            logger.info(f"⚡ Avg time/doc: {avg_time:.0f}ms")
+        
+        if self.stats['companies']:
+            logger.info("\n🏢 Per-Company Statistics:")
+            logger.info("-" * 60)
+            for company, stats in sorted(self.stats['companies'].items()):
+                logger.info(
+                    f"   {company:<20} | Docs: {stats['docs']:>3} | "
+                    f"Chunks: {stats['chunks']:>5} | Chars: {stats['chars']:>8,}"
+                )
+        
+        logger.info("=" * 60 + "\n")
+    
+    def get_store_stats(self) -> Dict:
+        """Get store stats"""
+        try:
+            temp_store = VectorStore(persist_directory=self.persist_dir) if self.vector_store is None else self.vector_store
+            count = temp_store.collection.count()
+            
+            if count > 0:
+                # ✅ FIX: Get ALL documents, not just 10
+                results = temp_store.collection.get(
+                    limit=count,  # Changed from min(10, count)
+                    include=['metadatas']
+                )
+                companies = set()
+                if results and 'metadatas' in results:
+                    for metadata in results['metadatas']:
+                        if metadata and 'company' in metadata:
+                            companies.add(metadata['company'])
+            else:
+                companies = set()
+            
+            return {
+                'total_chunks': count,
+                'companies': sorted(list(companies)),
+                'storage_location': self.persist_dir
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
 
 
 def main():
-    """Main ingestion script"""
-    import argparse
+    """Main function"""
+    logger.info("\n" + "=" * 60)
+    logger.info("  🏥 HEALTH INSURANCE POLICY INGESTION")
+    logger.info("=" * 60 + "\n")
     
-    parser = argparse.ArgumentParser(description="Ingest policy documents")
-    parser.add_argument(
-        "--reset",
-        action="store_true",
-        help="Reset vector store before ingestion"
-    )
-    parser.add_argument(
-        "--dir",
-        default="data/raw/policies",
-        help="Directory containing policy PDFs"
+    reset_store = '--reset' in sys.argv
+    
+    pipeline = PolicyIngestionPipeline(
+        source_dir="./data/raw/policies",
+        persist_dir="./data/vector_store"
     )
     
-    args = parser.parse_args()
+    if not reset_store:
+        logger.info("🔍 Checking existing vector store...")
+        store_stats = pipeline.get_store_stats()
+        if 'error' not in store_stats and store_stats['total_chunks'] > 0:
+            print("\n⚠️  Vector store already contains data!")
+            response = input("Reset and re-ingest? (yes/no): ").strip().lower()
+            reset_store = response in ['yes', 'y']
+    else:
+        logger.info("🔄 Reset flag detected")
     
-    if args.reset:
-        print("\n⚠️  WARNING: This will delete all existing data in vector store!")
-        response = input("Continue? (yes/no): ")
-        if response.lower() != "yes":
-            print("Aborted.")
-            return
+    print()
+    stats = pipeline.ingest_all(reset_store=reset_store)
     
-    # Run ingestion
-    ingestion = PolicyIngestion(reset=args.reset)
-    ingestion.ingest_all(base_dir=args.dir)
+    if 'error' in stats:
+        logger.error(f"\n❌ INGESTION FAILED: {stats['error']}")
+        return
     
-    print("\n✅ Ingestion pipeline complete!")
-    print("\n📍 Next steps:")
-    print("   1. Run: python scripts/verify_ingestion.py")
-    print("   2. Test: python scripts/test_rag_complete.py")
-    print("   3. Start API: uvicorn src.api.main:app --reload")
+    if stats.get('total_chunks', 0) > 0:
+        logger.info("🔍 Verifying ingestion...")
+        final_stats = pipeline.get_store_stats()
+        if 'error' not in final_stats:
+            logger.info(f"\n✅ VERIFICATION SUCCESSFUL")
+            logger.info(f"   • Total chunks: {final_stats['total_chunks']:,}")
+            logger.info(f"   • Companies: {', '.join(final_stats['companies'])}\n")
+    else:
+        logger.error("\n❌ No chunks created")
+    
+    logger.info("=" * 60)
+    logger.info("  ✅ INGESTION COMPLETE")
+    logger.info("=" * 60 + "\n")
 
 
 if __name__ == "__main__":

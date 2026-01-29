@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # 🚀 OPTIMIZED OLLAMA SETTINGS
     # ==========================================
     ollama_base_url: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="llama3.2:3b")
+    ollama_model: str = Field(default="phi3:mini")
     
     # ✅ OPTIMIZED: Lower temperature for factual consistency
     ollama_temperature: float = Field(default=0.1)
@@ -70,11 +70,11 @@ class Settings(BaseSettings):
     initial_retrieval_k: int = Field(default=20)  # For hybrid retrieval (4x top_k)
     
     # ✅ OPTIMIZED: Higher similarity threshold for quality
-    similarity_threshold: float = Field(default=0.5)  # Increased from 0.3
+    similarity_threshold: float = Field(default=0.3)  # Increased from 0.3
     
     # ✅ NEW: Retrieval thresholds
-    initial_similarity_threshold: float = Field(default=0.25)  # For initial retrieval
-    final_similarity_threshold: float = Field(default=0.5)  # For final results
+    initial_similarity_threshold: float = Field(default=0.30)  # For initial retrieval
+    final_similarity_threshold: float = Field(default=0.00)  # For final results
     
     # ✅ NEW: Hybrid retrieval weights
     semantic_weight: float = Field(default=0.40)

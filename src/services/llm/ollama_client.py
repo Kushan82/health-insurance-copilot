@@ -65,7 +65,7 @@ class OllamaClient:
     def _generate_cache_key(self, prompt: str, system_prompt: str, temperature: float) -> str:
         """Generate cache key from prompt parameters"""
         # Use first 500 chars of prompt + system prompt + temperature
-        content = f"{prompt[:500]}_{system_prompt[:100]}_{temperature}" 
+        content = f"{prompt}_{system_prompt}_{temperature}" 
         return hashlib.md5(content.encode()).hexdigest()
     
     def _get_cached_response(self, cache_key: str) -> Optional[str]:
