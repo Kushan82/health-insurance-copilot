@@ -2,7 +2,7 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 import numpy as np
 from loguru import logger
-
+from src.services.rag.query_rewriter import QueryExpander,QueryRewriter, MultiQueryGenerator
 from src.core.config import get_settings
 from src.services.rag.embedding_service import EmbeddingService
 from src.services.rag.vector_store import VectorStore
@@ -28,6 +28,9 @@ class Retriever:
     ):
         self.embedding_service = embedding_service or EmbeddingService()
         self.vector_store = vector_store or VectorStore()
+        self.query_rewriter = QueryRewriter()
+        self.query_expander = QueryExpander()
+        self.multi_query_generator = MultiQueryGenerator()
         
         logger.info("Retriever initialized")
     
@@ -409,3 +412,72 @@ class Retriever:
             return min(matches / 3, 1.0)
         
         return 0.5  # Default neutral bonus
+def __init__(self, vector_store: VectorStore, embedding_service: EmbeddingService):
+    # ... existing code ...
+    
+    # NEW: Add query enhancement
+    self.query_rewriter = QueryRewriter()
+    self.multi_query_generator = MultiQueryGenerator()
+    self.query_expander = QueryExpander()
+
+    # Add new method to Retriever class
+    def retrieve_enhanced(
+        self,
+        query: str,
+        top_k: int = 5,
+        policy_filter: str = None,
+        use_multi_query: bool = True
+    ) -> List[Dict]:
+        """
+        Enhanced retrieval with query rewriting and multi-query
+        
+        Args:
+            query: User query
+            top_k: Number of results per query
+            policy_filter: Filter by policy name
+            use_multi_query: Use multiple query variations
+        
+        Returns:
+            List of unique retrieved chunks, ranked by relevance
+        """
+        logger.info(f"Enhanced retrieval for: '{query[:50]}...'")
+        
+        # Step 1: Rewrite query
+        rewrite_result = self.query_rewriter.rewrite(query)
+        rewritten_query = rewrite_result['rewritten']
+        
+        # Step 2: Generate multiple queries
+        queries = [rewritten_query]
+        if use_multi_query:
+            multi_queries = self.multi_query_generator.generate(rewritten_query)
+            queries.extend(multi_queries)
+        
+        # Step 3: Expand with synonyms
+        expansion = self.query_expander.expand(rewritten_query)
+        queries.extend(expansion['all_variants'])
+        
+        # Remove duplicates while preserving order
+        queries = list(dict.fromkeys(queries))[:5]  # Top 5 unique queries
+        
+        logger.info(f"Using {len(queries)} query variations for retrieval")
+        
+        # Step 4: Retrieve for each query
+        all_results = {}  # chunk_id -> (chunk, max_similarity)
+        
+        for q in queries:
+            results = self.retrieve(q, top_k=top_k, policy_filter=policy_filter)
+            
+            for result in results:
+                chunk_id = result.get('chunk_id', result['text'][:50])
+                similarity = result['similarity']
+                
+                # Keep highest similarity score
+                if chunk_id not in all_results or similarity > all_results[chunk_id][1]:
+                    all_results[chunk_id] = (result, similarity)
+        
+        # Step 5: Sort by similarity and return top_k
+        sorted_results = sorted(all_results.values(), key=lambda x: x[1], reverse=True)
+        final_results = [result[0] for result in sorted_results[:top_k]]
+        
+        logger.info(f"✅ Enhanced retrieval: {len(final_results)} unique chunks")
+        return final_results

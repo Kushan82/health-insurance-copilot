@@ -1,0 +1,164 @@
+health-insurance-copilot/
+├── .env
+├── .env.example
+├── .gitignore
+├── README.md
+├── pyproject.toml
+├── setup_project.py
+├── docs/
+
+├── frontend/
+     ├──components/
+     │   ├── __init__.py
+     ├──pages/
+     │   ├── __init__.py
+     ├──utils/
+     │   ├── __init__.py
+├── data/
+
+│   ├── cache/
+             ├──semantic_cache/
+             ├──response_cache/
+             ├──query_cache/
+             ├──retriever_cache/
+│   ├── evaluation/
+             ├──benchmarks/
+             ├──results/
+             ├──reports/
+                   ├──base_model/
+                   ├──fine_tuned/
+             ├──human_eval
+│   ├── fine_tuning/
+             ├──adapters/
+             ├──checkpoints/
+             ├──configs/
+             ├──datasets/
+             ├──models/
+             ├──logs/
+│   ├── monitoring/
+             ├──traces/
+             ├──metrics/
+             ├──guardails/
+│   ├── processed/
+             ├──embeddings/
+             ├──chunks/
+│   ├── raw/
+│   │   └── policies/
+│   │       ├── bajaj/
+│   │       │   ├── my_health_care_plan_1_brochure.pdf
+│   │       │   ├── my_health_care_plan_1_master.json
+│   │       │   ├── my_health_care_plan_1_wording.pdf
+│   │       │   ├── my_health_care_plan_6_brochure.pdf
+│   │       │   └── my_health_care_plan_6_master.json
+│   │       ├── care_health/
+│   │       │   ├── care_supreme_brochure.pdf
+│   │       │   ├── care_supreme_master.json
+│   │       │   ├── care_supreme_prospectus.pdf
+│   │       │   ├── care_supreme_wording.pdf
+│   │       │   ├── care_ultimate_brochure.pdf
+│   │       │   ├── care_ultimate_master.json
+│   │       │   ├── care_ultimate_prospectus.pdf
+│   │       │   └── care_ultimate_wording.pdf
+│   │       ├── hdfc_ergo/
+│   │       │   ├── optima_restore_brochure.pdf
+│   │       │   ├── optima_restore_master.json
+│   │       │   ├── optima_restore_prospectus.pdf
+│   │       │   ├── optima_restore_wording.pdf
+│   │       │   ├── optima_secure_brochure.pdf
+│   │       │   ├── optima_secure_master.json
+│   │       │   ├── optima_secure_prospectus.pdf
+│   │       │   └── optima_secure_wording.pdf
+│   │       └── tata_aig/
+│   │           ├── medicare_plus_brochure.pdf
+│   │           ├── medicare_plus_master.json
+│   │           ├── medicare_plus_prospectus.pdf
+│   │           ├── medicare_plus_wording.pdf
+│   │           ├── medicare_premier_brochure_.pdf
+│   │           ├── medicare_premier_master.json
+│   │           ├── medicare_premier_prospectus.pdf
+│   │           └── medicare_premier_wording.pdf
+│   ├── vector_store/
+│   │   ├── chroma.sqlite3
+│   │   └── f6a711b3-8e44-411b-9add-688607cc54b0/
+│   │       ├── data_level0.bin
+│   │       ├── header.bin
+│   │       └── length.bin
+│   └── vector_store_backup/
+│       ├── chroma.sqlite3
+│       ├── 3773bebd-ebd6-4790-aae4-f865956a4b68/
+│       │   ├── data_level0.bin
+│       │   ├── header.bin
+│       │   ├── index_metadata.pickle
+│       │   ├── length.bin
+│       │   └── link_lists.bin
+│       └── 96f92a90-57ee-4e6b-a69d-4558adfb7437/
+│           ├── data_level0.bin
+│           ├── header.bin
+│           └── length.bin
+├── logs/
+│   ├── app.log
+│   └── errors.log
+├── scripts/
+
+     ├──data_collection/
+     │   ├── __init__.py
+     ├──data_preprocessing/
+     │   ├── __init__.py
+     ├──deployment/
+     │   ├── __init__.py
+     ├──evaluation/
+     │   ├── __init__.py
+     ├──fine_tuning/
+     │   ├── __init__.py
+│   ├── debug_vector_store.py
+│   ├── hybrid_retrieval_test.py
+│   ├── ingest_master_documents.py
+│   ├── ingest_policies.py
+│   ├── test_components.py
+│   ├── test_document_processing.py
+│   ├── test_rag_complete.py
+│   ├── test_rag_components.py
+│   ├── test_retrieval_debug.py
+│   └── verify_ingestion.py
+└── src/
+
+    ├── api/
+    │   └── main.py
+         ├── middleware/
+         │   └── __init__.py
+         ├── routes/
+         │   └── __init__.py
+    ├── data_preprocessing/
+    │   └──__init__.py
+    ├── fine_tuning/
+     │   └──__init__.py
+    ├── core/
+    │   ├── config.py
+    │   ├── constants.py
+    │   └── exceptions.py
+    ├── monitoring/
+    │   └── logger.py
+
+    ├── models/
+    │   └── __init__.py
+    ├── utils/
+    │   └── __init__.py
+    └── services/
+        ├── llm/
+        │   └── ollama_client.py
+        └── rag/
+            ├── __init__.py
+            ├── chunker.py
+            ├── document_loader.py
+            ├── embedding_service.py
+            ├── fact_extractor.py
+            ├── query_processor.py
+            ├── rag_chain.py
+            ├── retriever.py
+            ├── semantic_chunker.py
+            ├── text_processor.py
+            └── vector_store.py
+this is the current folder structure
+of my project
+
+lets proceed with the next part of the project the next phase
