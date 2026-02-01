@@ -121,6 +121,9 @@ python_functions = ["test_*"]
 addopts = "-v --cov=src --cov-report=term-missing --cov-report=html"
 asyncio_mode = "auto"
 
+[tool.poetry.dependencies]
+sentence-transformers = "^2.2.2"
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

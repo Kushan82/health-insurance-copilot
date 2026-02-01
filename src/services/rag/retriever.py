@@ -2,10 +2,12 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 import numpy as np
 from loguru import logger
+from torch import topk
 from src.services.rag.query_rewriter import QueryExpander,QueryRewriter, MultiQueryGenerator
 from src.core.config import get_settings
 from src.services.rag.embedding_service import EmbeddingService
 from src.services.rag.vector_store import VectorStore
+from src.services.rag.reranker import CrossEncoderReranker, HybridReranker
 
 settings = get_settings()
 
@@ -31,8 +33,18 @@ class Retriever:
         self.query_rewriter = QueryRewriter()
         self.query_expander = QueryExpander()
         self.multi_query_generator = MultiQueryGenerator()
+        #Reranker
+        try:
+            self.reranker = CrossEncoderReranker()
+            self.use_reranker = True
+            logger.info("✅ Cross-encoder reranker initialized")
+        except Exception as e:
+            logger.warning(f"Reranker initialization failed: {e}")
+            self.reranker = None
+            self.use_reranker = False
         
         logger.info("Retriever initialized")
+
     
     def retrieve(
         self,
@@ -412,13 +424,6 @@ class Retriever:
             return min(matches / 3, 1.0)
         
         return 0.5  # Default neutral bonus
-def __init__(self, vector_store: VectorStore, embedding_service: EmbeddingService):
-    # ... existing code ...
-    
-    # NEW: Add query enhancement
-    self.query_rewriter = QueryRewriter()
-    self.multi_query_generator = MultiQueryGenerator()
-    self.query_expander = QueryExpander()
 
     # Add new method to Retriever class
     def retrieve_enhanced(
@@ -426,20 +431,10 @@ def __init__(self, vector_store: VectorStore, embedding_service: EmbeddingServic
         query: str,
         top_k: int = 5,
         policy_filter: str = None,
-        use_multi_query: bool = True
-    ) -> List[Dict]:
-        """
-        Enhanced retrieval with query rewriting and multi-query
-        
-        Args:
-            query: User query
-            top_k: Number of results per query
-            policy_filter: Filter by policy name
-            use_multi_query: Use multiple query variations
-        
-        Returns:
-            List of unique retrieved chunks, ranked by relevance
-        """
+        use_multi_query: bool = True,
+        use_reranker: bool = True
+    ) -> List[RetrievedChunk]:  # ✅ FIXED: Return RetrievedChunk, not Dict
+        """Enhanced retrieval with query rewriting, multi-query, and re-ranking"""
         logger.info(f"Enhanced retrieval for: '{query[:50]}...'")
         
         # Step 1: Rewrite query
@@ -457,27 +452,45 @@ def __init__(self, vector_store: VectorStore, embedding_service: EmbeddingServic
         queries.extend(expansion['all_variants'])
         
         # Remove duplicates while preserving order
-        queries = list(dict.fromkeys(queries))[:5]  # Top 5 unique queries
-        
+        queries = list(dict.fromkeys(queries))[:5]
         logger.info(f"Using {len(queries)} query variations for retrieval")
         
-        # Step 4: Retrieve for each query
-        all_results = {}  # chunk_id -> (chunk, max_similarity)
+        filters = {'policy': policy_filter} if policy_filter else None
         
+        # Step 4: Retrieve for each query
+        all_results = {}
         for q in queries:
-            results = self.retrieve(q, top_k=top_k, policy_filter=policy_filter)
+            results = self.retrieve(q, top_k=top_k * 2, filters=filters)
             
-            for result in results:
-                chunk_id = result.get('chunk_id', result['text'][:50])
-                similarity = result['similarity']
+            for result in results:  # ✅ result is already RetrievedChunk
+                chunk_id = result.chunk_id  # ✅ FIXED: Use attribute, not .get()
+                similarity = result.similarity  # ✅ FIXED: Use attribute
                 
                 # Keep highest similarity score
-                if chunk_id not in all_results or similarity > all_results[chunk_id][1]:
-                    all_results[chunk_id] = (result, similarity)
+                if chunk_id not in all_results or similarity > all_results[chunk_id].similarity:
+                    all_results[chunk_id] = result
         
-        # Step 5: Sort by similarity and return top_k
-        sorted_results = sorted(all_results.values(), key=lambda x: x[1], reverse=True)
-        final_results = [result[0] for result in sorted_results[:top_k]]
+        # Step 5: Sort by similarity
+        sorted_results = sorted(all_results.values(), key=lambda x: x.similarity, reverse=True)
+        candidates = sorted_results[:top_k * 2]
+        
+        # Step 6: Re-rank with cross encoder
+        if use_reranker and self.reranker and self.reranker.model and len(candidates) > 1:
+            logger.info(f"🔄 Re-ranking {len(candidates)} candidates with cross-encoder...")
+            final_results = self.reranker.rerank(
+                query=query,  # Use original query for reranking
+                chunks=candidates,
+                top_k=top_k
+            )
+            
+            # ✅ Mark chunks as reranked
+            for chunk in final_results:
+                chunk.metadata['reranked'] = True  # ✅ FIXED: Direct attribute access
+            
+            logger.info(f"✅ Re-ranking complete. Top score: {final_results[0].similarity:.3f}")
+        else:
+            final_results = candidates[:top_k]
+            logger.info("ℹ️  Reranker not used (disabled or unavailable)")
         
         logger.info(f"✅ Enhanced retrieval: {len(final_results)} unique chunks")
-        return final_results
+        return final_results  # ✅ Returns List[RetrievedChunk]
